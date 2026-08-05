@@ -3,6 +3,7 @@ import threading
 import time
 
 from .store import EventStore
+from .adapters import next_cron_time
 
 
 class EventEngine:
@@ -15,6 +16,7 @@ class EventEngine:
         self.retry_max = int(os.getenv("EVENT_RETRY_MAX_SECONDS", "1800"))
         self.stop_event = threading.Event()
         self.thread = None
+        self.scheduler_enabled = os.getenv("SCHEDULER_ENABLED", "true").lower() == "true"
 
     def execute(self, task: dict):
         event_type = task["event_type"]
@@ -31,6 +33,16 @@ class EventEngine:
         self.store.recover()
         while not self.stop_event.is_set():
             self.store.heartbeat()
+            if self.scheduler_enabled:
+                schedule = self.store.claim_due_schedule()
+                if schedule:
+                    emitted_at = time.time()
+                    self.store.dispatch(
+                        schedule["event_type"],
+                        schedule["payload"],
+                        f"schedule:{schedule['schedule_id']}:{int(schedule['next_run_at'])}",
+                    )
+                    self.store.finish_schedule(schedule["schedule_id"], emitted_at, next_cron_time(schedule["cron_expression"], emitted_at))
             if not self.enabled:
                 self.stop_event.wait(self.poll_seconds)
                 continue

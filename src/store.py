@@ -77,6 +77,18 @@ class EventStore:
           decided_at REAL,
           FOREIGN KEY(task_id) REFERENCES tasks(task_id)
         );
+        CREATE TABLE IF NOT EXISTS schedules (
+          schedule_id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          cron_expression TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          next_run_at REAL NOT NULL,
+          last_run_at REAL,
+          created_at REAL NOT NULL,
+          updated_at REAL NOT NULL
+        );
         """)
         columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
         if "next_retry_at" not in columns:
@@ -258,7 +270,58 @@ class EventStore:
             "approvals_pending": db.execute("SELECT COUNT(*) FROM approvals WHERE status='pending'").fetchone()[0],
             "receipts_total": db.execute("SELECT COUNT(*) FROM receipts").fetchone()[0],
             "tasks_last_hour": self.tasks_last_hour(),
+            "schedules_enabled": db.execute("SELECT COUNT(*) FROM schedules WHERE enabled=1").fetchone()[0],
         }
+
+    def create_schedule(self, name: str, cron_expression: str, event_type: str, payload: dict, next_run_at: float):
+        now = time.time()
+        schedule_id = f"schedule-{uuid.uuid4()}"
+        self.connection().execute(
+            "INSERT INTO schedules(schedule_id,name,cron_expression,event_type,payload_json,next_run_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            (schedule_id, name, cron_expression, event_type, self._json(payload), next_run_at, now, now),
+        )
+        receipt_id = self.receipt("schedule.created", {"schedule_id": schedule_id, "name": name, "next_run_at": next_run_at})
+        return {"schedule_id": schedule_id, "name": name, "next_run_at": next_run_at, "receipt_id": receipt_id}
+
+    def list_schedules(self):
+        rows = self.connection().execute("SELECT * FROM schedules ORDER BY name").fetchall()
+        return [dict(row) | {"payload": json.loads(row["payload_json"]), "enabled": bool(row["enabled"])} for row in rows]
+
+    def set_schedule_enabled(self, schedule_id: str, enabled: bool):
+        cursor = self.connection().execute("UPDATE schedules SET enabled=?,updated_at=? WHERE schedule_id=?", (int(enabled), time.time(), schedule_id))
+        if cursor.rowcount != 1:
+            raise ValueError("schedule not found")
+        receipt_id = self.receipt("schedule.enabled" if enabled else "schedule.paused", {"schedule_id": schedule_id})
+        return {"schedule_id": schedule_id, "enabled": enabled, "receipt_id": receipt_id}
+
+    def delete_schedule(self, schedule_id: str):
+        row = self.connection().execute("SELECT name FROM schedules WHERE schedule_id=?", (schedule_id,)).fetchone()
+        if not row:
+            raise ValueError("schedule not found")
+        self.connection().execute("DELETE FROM schedules WHERE schedule_id=?", (schedule_id,))
+        receipt_id = self.receipt("schedule.deleted", {"schedule_id": schedule_id, "name": row["name"]})
+        return {"schedule_id": schedule_id, "deleted": True, "receipt_id": receipt_id}
+
+    def claim_due_schedule(self):
+        db = self.connection()
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            row = db.execute("SELECT * FROM schedules WHERE enabled=1 AND next_run_at<=? ORDER BY next_run_at LIMIT 1", (time.time(),)).fetchone()
+            if not row:
+                db.execute("COMMIT")
+                return None
+            db.execute("UPDATE schedules SET enabled=0,updated_at=? WHERE schedule_id=?", (time.time(), row["schedule_id"]))
+            db.execute("COMMIT")
+            value = dict(row)
+            value["payload"] = json.loads(value.pop("payload_json"))
+            return value
+        except Exception:
+            db.execute("ROLLBACK")
+            raise
+
+    def finish_schedule(self, schedule_id: str, last_run_at: float, next_run_at: float):
+        self.connection().execute("UPDATE schedules SET enabled=1,last_run_at=?,next_run_at=?,updated_at=? WHERE schedule_id=?", (last_run_at, next_run_at, time.time(), schedule_id))
+        return self.receipt("schedule.emitted", {"schedule_id": schedule_id, "last_run_at": last_run_at, "next_run_at": next_run_at})
 
     def heartbeat(self):
         now = time.time()

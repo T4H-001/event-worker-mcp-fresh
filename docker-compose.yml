@@ -8,6 +8,7 @@ services:
       - "127.0.0.1:8081:8081"
     volumes:
       - event_worker_data:/data
+      - event_worker_watch:/watch:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import socket;s=socket.create_connection(('127.0.0.1',8081),2);s.close()"]
       interval: 10s
@@ -17,3 +18,5 @@ services:
 volumes:
   event_worker_data:
     name: t4h_event_worker_mcp_fresh_data
+  event_worker_watch:
+    name: t4h_event_worker_mcp_fresh_watch

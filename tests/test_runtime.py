@@ -1,9 +1,13 @@
 import tempfile
 import time
 import unittest
+import hashlib
+import hmac
+from pathlib import Path
 
 from src.engine import EventEngine
 from src.store import EventStore
+from src.adapters import FileWatcher, next_cron_time, normalize_github_event, verify_github_signature
 
 
 class RuntimeTests(unittest.TestCase):
@@ -60,6 +64,33 @@ class RuntimeTests(unittest.TestCase):
         accepted = self.store.dispatch("echo", {}, "audit-1")
         self.assertGreaterEqual(self.store.metrics()["receipts_total"], 1)
         self.assertEqual(accepted["task_id"], self.store.audit(accepted["task_id"])[0]["task_id"])
+
+    def test_cron_schedule_storage(self):
+        next_run = next_cron_time("*/5 * * * *", 1785928200)
+        created = self.store.create_schedule("five-minute", "*/5 * * * *", "cron.test", {"x": 1}, next_run)
+        schedules = self.store.list_schedules()
+        self.assertEqual(created["schedule_id"], schedules[0]["schedule_id"])
+        self.assertGreater(next_run, 1785928200)
+
+    def test_file_watcher_detects_bounded_change(self):
+        root = Path(self.temp.name) / "watch"
+        root.mkdir()
+        watcher = FileWatcher(self.store, str(root))
+        watcher.scan_once(emit=False)
+        (root / "new.txt").write_text("hello")
+        changes = watcher.scan_once(emit=True)
+        self.assertEqual([("created", "new.txt", 5)], changes)
+        task = self.store.claim_next()
+        self.assertEqual("file.created", task["event_type"])
+
+    def test_github_signature_and_normalization(self):
+        body = b'{"action":"opened"}'
+        signature = "sha256=" + hmac.new(b"secret", body, hashlib.sha256).hexdigest()
+        self.assertTrue(verify_github_signature("secret", body, signature))
+        self.assertFalse(verify_github_signature("secret", body, "sha256=bad"))
+        event_type, data = normalize_github_event("issues", "delivery-1", {"action": "opened", "repository": {"full_name": "T4H001/repo"}, "issue": {"number": 7}})
+        self.assertEqual("github.issues.opened", event_type)
+        self.assertEqual(7, data["issue_number"])
 
 
 if __name__ == "__main__":

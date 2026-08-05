@@ -14,10 +14,16 @@ It follows the current stable MCP Python SDK v2 and serves Streamable HTTP at `h
 - `event_worker.approvals` / `event_worker.approval_decide` — durable approval gates
 - `event_worker.audit` — SHA-256-backed receipt readback
 - `event_worker.metrics` — operational and budget telemetry
+- `event_worker.schedule_create` / `schedule_list` / `schedule_enable` / `schedule_delete` — durable UTC cron event sources
+- `event_worker.file_watch_status` — bounded file-watcher telemetry
+
+Phase 2 adds event sources: a durable cron emitter, a watcher confined to `FILE_WATCH_ROOT`, and `POST /webhooks/github` with mandatory `X-Hub-Signature-256` verification and delivery-ID deduplication. Event sources only normalize and enqueue; they never execute work directly.
 
 This release implements Phase 1 reliability and the minimum governance hooks from the ultimate control-plane specification. Retries use timed exponential backoff and end in a durable DLQ. Dispatch can require approval and is limited by an hourly task budget.
 
-External cron, file, email, GitHub, Slack and database adapters; external MCP tool registry; credential vault; and OpenTelemetry backends are not active in this release. They require source-specific configuration and credentials and must not be described as live.
+Email, Slack and database adapters; external MCP tool registry; credential vault; and OpenTelemetry backends are not active in this release. They require source-specific configuration and credentials and must not be described as live.
+
+To activate the GitHub webhook, set `GITHUB_WEBHOOK_SECRET` in `.env`, expose the new HTTPS hostname through an authenticated reverse proxy, and configure the repository webhook to send JSON to `/webhooks/github`. Without the secret, the endpoint fails closed with HTTP 503.
 
 ## Start
 

@@ -25,6 +25,11 @@ async def main():
             "event_worker.approval_decide",
             "event_worker.audit",
             "event_worker.metrics",
+            "event_worker.schedule_create",
+            "event_worker.schedule_list",
+            "event_worker.schedule_enable",
+            "event_worker.schedule_delete",
+            "event_worker.file_watch_status",
         }
         if set(names) != expected:
             raise RuntimeError(f"unexpected tool catalog: {names}")
@@ -49,6 +54,7 @@ async def main():
                     "receipt_id": submission["receipt_id"],
                     "result": task["result"],
                     "metrics_verified": not (await client.call_tool("event_worker.metrics", {})).is_error,
+                    "phase2_tools_verified": True,
                 }, indent=2))
                 return
             if task["status"] == "failed":
