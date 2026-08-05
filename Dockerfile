@@ -1,0 +1,9 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY src ./src
+RUN mkdir -p /data && chown -R nobody:nogroup /data
+USER nobody
+EXPOSE 8081
+CMD ["python", "-m", "src.server"]
